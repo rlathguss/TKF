@@ -15,7 +15,7 @@ def sysm_tkf(z, dt, missile, accel_m, count, sat_upper, sat_lower, firstRun):
 
     if firstRun == 0:
         # 지대지 초기 추정값
-        x = np.array([[np.deg2rad(15)], [10000]]) 
+        x = np.array([[np.deg2rad(30)], [10000]]) 
         
         # 오차 공분산 초기 설정
         P = np.array([[0.0052, 0],[0, 50]])
@@ -57,11 +57,12 @@ def Ajacobian(x, missile, dt):
     A[0, 1] = - missile['V'] * np.sin(x[0]) / x[1]**2
     A[1, 0] =  missile['V'] * np.sin(x[0])
     A[1, 1] = 0
-    A = np.eye(2) + A * dt
+    A = A * dt + np.eye(2)
     return A
 
 
 def Qupdate(A, missile, dt, sigma_w):
+    A = A - np.eye(2)
     Q = np.zeros((2,2))
     Q[0, 0] = ((A[0, 0])**2 * dt**2) / 3 + dt * A[0, 0] + 1
     Q[0, 1] = (A[0, 0] * A[1, 0] * dt**2) / 3 + dt * A[1, 0] / 2

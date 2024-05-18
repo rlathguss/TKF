@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 from SysM import sysm_tkf
 from MeasM import measm_tkf
 
@@ -43,7 +44,7 @@ eta = target['V'] / missile['V']
 # sigma_d Selection in order to bring out lambda_switch and also compare whether initial setup is good or not.
 sigma_d_lower = np.arcsin(eta)  # rad, Lower bound for sigma_d
 sigma_d_upper = min(np.arccos(2*eta), sigma_max)  # rad, Upper bound for sigma_d
-sigma_d = np.deg2rad(30)  # rad, Desired Look Angle / Commanded Look Angle
+sigma_d = np.deg2rad(10)  # rad, Desired Look Angle / Commanded Look Angle
 
 
 
@@ -59,7 +60,7 @@ zeta1 = eta / np.sin(sigma_d)
 zeta2 = eta / np.cos(sigma_d)
 
 
-amf = np.deg2rad(-45)  # rad, Desired Impact Angle
+amf = np.deg2rad(-50)  # rad, Desired Impact Angle
 lambda_switch = ((np.arctan2(np.sin(amf) - eta * np.sin(target['HDG']), np.cos(amf) - eta * np.cos(target['HDG']))) - ((amf) - (sigma_d)) / N) * (N / (N - 1))
 
 
@@ -170,7 +171,6 @@ for k in range(Niter):
     
     # SYSTEM MODEL & GUIDANCE FILTER
     E_range, E_sigma, Cov_P, Ez_total, pdf_l, pdf_h, pl, ph, pus, bias_lambda, RR, HH, Ez_us, KK, K_EKF, x_EKF, xpp, x_nobias, HH_nobias, RR_nobias, Ez_total_nobias, K_nobias = sysm_tkf(z, dt, missile, accel_m, count, sat_upper, sat_lower,k)
-    
     bias = bias_lambda * 0.0052  # bias = bias_lambda * "Measurement Noise Deviation(sigma_v)" 0.0052
     logger['bias'].append(bias)
     logger['RR'].append(np.linalg.norm(RR))
@@ -249,8 +249,8 @@ for k in range(Niter):
         break
 
     # Missile 위치 업데이트
-    missile['y'] += missile['yV'] * dt
-    missile['x'] += missile['xV'] * dt
+    missile['y'] += missile['yV'] * dt + 1 * np.random.randn()
+    missile['x'] += missile['xV'] * dt + 1 * np.random.randn()
 
     M_accel_y = +accel_m * np.cos(missile['HDG'])
     M_accel_x = -accel_m * np.sin(missile['HDG'])
@@ -302,24 +302,65 @@ for k in range(Niter):
 
 
 
-# #--------------------------------------------------------------------------
-# # Sim result
-# #--------------------------------------------------------------------------
-# # Impact index
-# M, I = np.min(logger['E_range']), np.argmin(logger['E_range'])
-# print(f' M : {M} ')
-# print(f' I : {I} ')
+#--------------------------------------------------------------------------
+# Sim result
+#--------------------------------------------------------------------------
+# Impact index
+M, I = np.min(logger['E_range']), np.argmin(logger['E_range'])
+print(f' M : {M} ')
+print(f' I : {I} ')
 
 
 fig, axs = plt.subplots(2, 3, figsize=(15, 10))
-
 # Position
-axs[0, 0].scatter(logger['mx'], logger['my'], label='Missile', s=0.7)
-axs[0, 0].scatter(logger['tx'], logger['ty'], label='Target', s=2)
-axs[0, 0].set_title('M&T Trajectory')
-axs[0, 0].legend()
-axs[0, 0].set_xlabel('+x (m)')
-axs[0, 0].set_ylabel('+y (m)')
+# axs[0, 0].scatter(logger['mx'], logger['my'], label='Missile', s=0.7)
+# axs[0, 0].scatter(logger['tx'], logger['ty'], label='Target', s=2)
+# axs[0, 0].set_title('M&T Trajectory')
+# axs[0, 0].legend()
+# axs[0, 0].set_xlabel('+x (m)')
+# axs[0, 0].set_ylabel('+y (m)')
+
+mx_array = np.array(logger['mx'])
+my_array = np.array(logger['my'])
+tx_array = np.array(logger['tx'])
+ty_array = np.array(logger['ty'])
+e_range = np.array(logger['E_range'])
+
+# 희석 인덱스 생성
+sparse_index = np.arange(0, len(mx_array), 100)
+if sparse_index[-1] != len(mx_array) - 1:
+    sparse_index = np.append(sparse_index, len(mx_array) - 1)
+
+# 데이터 희석
+sparse_mx = mx_array[sparse_index]
+sparse_my = my_array[sparse_index]
+sparse_tx = tx_array[sparse_index]
+sparse_ty = ty_array[sparse_index]
+sparse_e_range = e_range[sparse_index]
+
+# 충돌 시점 찾기 (희석된 데이터 사용)
+collision_index = np.where(sparse_e_range <= 3)[0]
+if collision_index.size > 0:
+    last_frame = collision_index[0] 
+else:
+    last_frame = len(sparse_e_range)
+
+
+# 애니메이션 업데이트 함수
+def update(frame):
+    axs[0, 0].clear()
+    axs[0, 0].plot(sparse_mx[:frame], sparse_my[:frame], 'r', label='Missile')
+    # axs[0, 0].plot(sparse_tx[:frame], sparse_ty[:frame], 'b', label='Target')
+    axs[0, 0].plot(sparse_mx[frame-1], sparse_my[frame-1], 'ro')
+    axs[0, 0].plot(sparse_tx[frame-1], sparse_ty[frame-1], 'bo', label='Target')
+
+    axs[0, 0].legend()
+    axs[0, 0].set_title('M&T Trajectory')
+    axs[0, 0].set_xlabel('+x (m)')
+    axs[0, 0].set_ylabel('+y (m)')
+
+ani = FuncAnimation(fig, update, frames=range(last_frame + 1), interval=50, repeat = False)
+
 
 # Estimated, True and Measured Sigma(Look angle)
 axs[0, 1].plot(logger['t'], np.rad2deg(logger['E_sigma']), linewidth=0.8, color='steelblue', label='Estimated Look Angle')
@@ -340,13 +381,27 @@ axs[0, 2].legend()
 axs[0, 2].set_xlabel('Time (s)')
 axs[0, 2].set_ylabel('deg')
 
-# Bias
-converted_bias = np.rad2deg(logger['bias'][1:])
-axs[1, 0].plot(logger['t'],  converted_bias.flatten(), label='bias')
-axs[1, 0].set_title('Bias Term')
-axs[1, 0].legend()
-axs[1, 0].set_xlabel('Elapsed time(sec)')
-axs[1, 0].set_ylabel('Bias Value')
+# Range Error between Estimation and True Range
+ax1 = axs[1, 0]
+t_index_value = logger['t'][I]
+ax1.plot(logger['t'], logger['E_range'], label='Estimated Range')
+ax1.plot(logger['t'], logger['true_range'], linewidth=2, label='True Range')
+ax1.scatter(logger['t'][I], M, color='red', label=f'Intercept: r = {M} m, t = {t_index_value} s', s=20)
+ax1.set_ylabel('Range (m)')
+ax1.set_xlabel('Elapsed time (sec)')
+ax1.set_title(f'IACCG(DPP&PPN), N = {N}')
+# 두 번째 y축 설정
+ax2 = ax1.twinx()  # 두 번째 y축을 위한 설정
+ax2.scatter(logger['t'], logger['est_error'], color='blue', label='Range Error', s=0.8)
+ax2.set_ylabel('Range Error btw Estimated and True Range [m])')
+
+# 레전드 핸들과 레이블 수집
+handles, labels = [], []
+for ax in [ax1, ax2]:
+    for handle, label in zip(*ax.get_legend_handles_labels()):
+        handles.append(handle)
+        labels.append(label)
+plt.legend(handles, labels)
 
 # Pus // pl // ph
 axs[1, 1].plot(logger['t'],  logger['pl'][1:], label='pl')
@@ -364,10 +419,29 @@ axs[1, 2].set_title('PDF_H // PDF_L')
 axs[1, 2].legend()
 axs[1, 2].set_xlabel('Elapsed time(sec)')
 axs[1, 2].set_ylabel('PDF')
-
 plt.tight_layout()
 plt.show()
 
+# Acceleration
+plt.figure()
+plt.plot(logger['t'], logger['M_Accel'], label='M_Accel')
+plt.title(f'IACCG(DPP+PPN)')
+plt.legend('Missile Acceleration')
+plt.ylabel('Missile Acceleration (m/s^2)')
+plt.xlabel('Elapsed time (sec)')
+plt.tight_layout()
+plt.show()
+
+
+
+
+# # Bias
+# converted_bias = np.rad2deg(logger['bias'][1:])
+# axs[1, 0].plot(logger['t'],  converted_bias.flatten(), label='bias')
+# axs[1, 0].set_title('Bias Term')
+# axs[1, 0].legend()
+# axs[1, 0].set_xlabel('Elapsed time(sec)')
+# axs[1, 0].set_ylabel('Bias Value')
 
 
 # # Range

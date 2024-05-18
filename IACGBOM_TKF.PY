@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 from SysM import sysm_tkf
 from MeasM import measm_tkf
 
@@ -30,20 +31,20 @@ target['V'] = np.sqrt(target['yV']**2 + target['xV']**2)  # velocity magnitude, 
 # Initial Look Angle
 sigma_0 = missile['HDG']    # rad
 accel_m = 0                 # Initial Missile Acceleration, m/s^2
-accel_max = 100             # m/s^2, acceleration limit
+accel_max = 120             # m/s^2, acceleration limit
 sat_upper = np.deg2rad(20)
 sat_lower = -sat_upper
-amf = np.deg2rad(-160)      # rad, Desired Impact Angle
+amf = np.deg2rad(-140)      # rad, Desired Impact Angle
 
 #==================== USER CHOSEN INITIAL PARAMETERS =====================
-Rf = 0.01
+Rf = 0.01 #0.5
 phi1 = 0.15
 k2 = np.deg2rad(10)
-k1 = np.deg2rad(9)      #is the value when Saturated region actually starts appearing.
+k1 = np.deg2rad(20)      #is the value when Saturated region actually starts appearing.
 
 
 Simtime = 100                 # 최대 시뮬레이션 지속 시간, 초
-dt = 0.01               # 시간 단계 크기, 초
+dt = 0.01     # 0.001          # 시간 단계 크기, 초
 Niter = int(Simtime / dt)     # 최대 반복 횟수
 
 logger = {
@@ -200,7 +201,7 @@ for k in range(Niter):
     
 
     
-    accel_m = -(Vm*f2/Rf + k2)*Vm*np.tanh(0.01*S);      # Missile Acceleration 계산
+    accel_m = -(Vm*f2/Rf + k2)*Vm*np.tanh(0.01*S);    # a = 10 -> 1  # Missile Acceleration 계산
     if abs(accel_m) > accel_max:                              # Acceleration Saturation Condition
         if accel_m < 0:
             accel_m = -accel_max
@@ -271,24 +272,58 @@ for k in range(Niter):
 
 
 
-# #--------------------------------------------------------------------------
-# # Sim result
-# #--------------------------------------------------------------------------
-# # Impact index
-# M, I = np.min(logger['E_range']), np.argmin(logger['E_range'])
-# print(f' M : {M} ')
-# print(f' I : {I} ')
-
+#--------------------------------------------------------------------------
+# Sim result
+#--------------------------------------------------------------------------
 
 fig, axs = plt.subplots(2, 3, figsize=(15, 10))
+M, I = np.min(logger['E_range']), np.argmin(logger['E_range'])
+print(f' M : {M} ')
+print(f' I : {I} ')
+
 
 # Position
-axs[0, 0].scatter(logger['mx'], logger['my'], label='Missile', s=0.7)
-axs[0, 0].scatter(logger['tx'], logger['ty'], label='Target', s=2)
-axs[0, 0].set_title('M&T Trajectory')
-axs[0, 0].legend()
-axs[0, 0].set_xlabel('+x (m)')
-axs[0, 0].set_ylabel('+y (m)')
+mx_array = np.array(logger['mx'])
+my_array = np.array(logger['my'])
+tx_array = np.array(logger['tx'])
+ty_array = np.array(logger['ty'])
+e_range = np.array(logger['E_range'])
+
+# 희석 인덱스 생성
+sparse_index = np.arange(0, len(mx_array), 100)
+if sparse_index[-1] != len(mx_array) - 1:
+    sparse_index = np.append(sparse_index, len(mx_array) - 1)
+
+# 데이터 희석
+sparse_mx = mx_array[sparse_index]
+sparse_my = my_array[sparse_index]
+sparse_tx = tx_array[sparse_index]
+sparse_ty = ty_array[sparse_index]
+sparse_e_range = e_range[sparse_index]
+
+# 충돌 시점 찾기 (희석된 데이터 사용)
+collision_index = np.where(sparse_e_range <= 3)[0]
+if collision_index.size > 0:
+    last_frame = collision_index[0] 
+else:
+    last_frame = len(sparse_e_range)
+
+
+# 애니메이션 업데이트 함수
+def update(frame):
+    axs[0, 0].clear()
+    axs[0, 0].plot(sparse_mx[:frame], sparse_my[:frame], 'r', label='Missile')
+    # axs[0, 0].plot(sparse_tx[:frame], sparse_ty[:frame], 'b', label='Target')
+    axs[0, 0].plot(sparse_mx[frame-1], sparse_my[frame-1], 'ro')
+    axs[0, 0].plot(sparse_tx[frame-1], sparse_ty[frame-1], 'bo', label='Target')
+
+    axs[0, 0].legend()
+    axs[0, 0].set_title('M&T Trajectory')
+    axs[0, 0].set_xlabel('+x (m)')
+    axs[0, 0].set_ylabel('+y (m)')
+
+ani = FuncAnimation(fig, update, frames=range(last_frame + 1), interval=50, repeat = False)
+
 
 # Estimated, True and Measured Sigma(Look angle)
 axs[0, 1].plot(logger['t'], np.rad2deg(logger['E_sigma']), linewidth=0.8, color='steelblue', label='Estimated Look Angle')
@@ -309,13 +344,27 @@ axs[0, 2].legend()
 axs[0, 2].set_xlabel('Time (s)')
 axs[0, 2].set_ylabel('deg')
 
-# Bias
-converted_bias = np.rad2deg(logger['bias'][1:])
-axs[1, 0].plot(logger['t'],  converted_bias.flatten(), label='bias')
-axs[1, 0].set_title('Bias Term')
-axs[1, 0].legend()
-axs[1, 0].set_xlabel('Elapsed time(sec)')
-axs[1, 0].set_ylabel('Bias Value')
+# Range Error between Estimation and True Range
+ax1 = axs[1, 0]
+t_index_value = logger['t'][I]
+ax1.plot(logger['t'], logger['E_range'], label='Estimated Range')
+ax1.plot(logger['t'], logger['true_range'], linewidth=2, label='True Range')
+ax1.scatter(logger['t'][I], M, color='red', label=f'Intercept: r = {M} m, t = {t_index_value} s', s=20)
+ax1.set_ylabel('Range (m)')
+ax1.set_xlabel('Elapsed time (sec)')
+ax1.set_title(f'IACCG(DPP&PPN), N = {N}')
+# 두 번째 y축 설정
+ax2 = ax1.twinx()  # 두 번째 y축을 위한 설정
+ax2.scatter(logger['t'], logger['est_error'], color='blue', label='Range Error', s=0.8)
+ax2.set_ylabel('Range Error btw Estimated and True Range [m])')
+
+# 레전드 핸들과 레이블 수집
+handles, labels = [], []
+for ax in [ax1, ax2]:
+    for handle, label in zip(*ax.get_legend_handles_labels()):
+        handles.append(handle)
+        labels.append(label)
+plt.legend(handles, labels)
 
 # Pus // pl // ph
 axs[1, 1].plot(logger['t'],  logger['pl'][1:], label='pl')
@@ -333,12 +382,17 @@ axs[1, 2].set_title('PDF_H // PDF_L')
 axs[1, 2].legend()
 axs[1, 2].set_xlabel('Elapsed time(sec)')
 axs[1, 2].set_ylabel('PDF')
-
-plt.tight_layout()
+plt.tight_layout()  # 플롯 레이아웃 조정
 plt.show()
 
 
-
+# # Bias
+# converted_bias = np.rad2deg(logger['bias'][1:])
+# axs[1, 0].plot(logger['t'],  converted_bias.flatten(), label='bias')
+# axs[1, 0].set_title('Bias Term')
+# axs[1, 0].legend()
+# axs[1, 0].set_xlabel('Elapsed time(sec)')
+# axs[1, 0].set_ylabel('Bias Value')
 
 
 
@@ -357,7 +411,7 @@ plt.show()
 
 # # Error between Estimation and True Range
 # plt.figure()
-# plt.scatter(logger['t'], logger['est_error'], color='blue', label='Range Error')
+# plt.scatter(logger['t'], logger['est_error'], color='blue', label='Range Error', s= 0.8)
 # plt.title(f'IACCG(DPP&PPN), N = {N}')
 # plt.legend()
 # plt.ylabel('Range Error btw Estimated and True Range [m])')

@@ -13,9 +13,9 @@ def sysm_tkf(z, dt, missile, accel_m, sat_upper, sat_lower, firstRun):
     B = np.array([[1/ missile['V'], 0]]).T  # 제어 입력 행렬
 
     if firstRun == 0:
-        x = np.array([[np.deg2rad(5)], [7000]])   # 초기 추정값   
-        P = np.array([[0.0052, 0],[0, 5]])       # 오차 공분산 초기 설정
-
+        x = np.array([[np.deg2rad(30)], [5000]])  # 초기 추정값   
+        P = np.array([[0.0052, 0],[0, 50]])       # 오차 공분산 초기 설정
+    
     A = Ajacobian(x, missile, dt)                 # Linearize
     xp = fxp(x, dt, B, accel_m, missile)          # 상태 예측
     xpp = xp[0] # 예측된 각도 
@@ -24,25 +24,17 @@ def sysm_tkf(z, dt, missile, accel_m, sat_upper, sat_lower, firstRun):
     Pp = A @ P @ A.T + Q                          # 오차 공분산 예측
     
     # Ez, HH, RR 계산
-    Ez_total, HH, RR, pdf_l, pdf_h, pl, ph, pus, bias_lambda, Ez_us, HH_nobias, RR_nobias, Ez_total_nobias = zExpectation(H, xp, sat_upper, sat_lower, sigma_v)
+    Ez_total, HH, RR, pdf_l, pdf_h, pl, ph, pus, bias_lambda, Ez_us = zExpectation(H, xp, sat_upper, sat_lower, sigma_v)
     
     # 칼만 이득 계산 및 상태 업데이트
     K = Pp @ HH.T @ np.linalg.inv(HH @ Pp @ HH.T + RR)
-    K_EKF = Pp @ H.T @ np.linalg.inv(H @ Pp @ H.T + R)
-    
     x = xp + K @ (z - Ez_total)
-    x_EKF = xp + K_EKF @ (z - H @ xp)
-    x_EKF = x_EKF[0]  # Look Angle
-    
-    K_nobias = Pp @ HH_nobias.T @ np.linalg.inv(HH_nobias @ Pp @ HH_nobias.T + RR_nobias)
-    x_nobias = xp + K_nobias @ (z - Ez_total_nobias)
-    
     P = Pp - K @ HH @ Pp  # 오차 공분산 계산
     
     E_sigma = x[0,0]  # 추정된 Look Angle
     E_range = x[1,0]  # 추정된 범위
 
-    return E_range, E_sigma, P, Ez_total, pdf_l, pdf_h, pl, ph, pus, bias_lambda, RR, HH, Ez_us, K, K_EKF, x_EKF, xpp, x_nobias, HH_nobias, RR_nobias, Ez_total_nobias, K_nobias
+    return E_range, E_sigma, P, Ez_total, pdf_l, pdf_h, pl, ph, pus, bias_lambda, Ez_us, RR, HH, K, xpp 
 
 
 
@@ -50,8 +42,7 @@ def fxp(x, dt, B, accel_m, missile):
     xdot = np.zeros((2,1))
     xdot[0] = missile['V'] * np.sin(x[0]) / x[1]
     xdot[1] = -missile['V'] * np.cos(x[0])
-    
-    u = accel_m
+    u = accel_m 
     xp = x + xdot * dt + B * u * dt 
 
     return xp
@@ -65,20 +56,27 @@ def Ajacobian(x, missile, dt):
     A = np.eye(2) + A * dt 
     return A
 
-def Qupdate(A, missile, dt,sigma_w):
+def Qupdate(A, missile, dt, sigma_w):
     A = (A - np.eye(2))/dt
     Q = np.zeros((2,2))
-    a=(1*A[0, 1])**2 #+ sigma_w**2/missile['V']**2
-    q= np.array([[a,0],[0,0]])
-    Q = dt*q+(q@A.T+A@q)/2*dt**2*+A@q@A.T/3*dt**3
-    
+
+    # position에 noise 추가
+    a = (A[0, 1])**2                 #{ vm * sin(singma) / R^2 }^2   ----> Look angle의 분산
+    q = np.array([[a,0],[0,0]])
+    Q = dt * q + (dt**2)/2*(q @ A.T + A @ q)  + (dt**3)/ 3* (A @ q @ A.T) 
+
+
+    # 가속도에 noise 추가
     # Q[0, 0] = ((A[0, 0])**2 * dt**2) / 3 + dt * A[0, 0] + 1
     # Q[0, 1] = (A[0, 0] * A[1, 0] * dt**2) / 3 + dt * A[1, 0] / 2
     # Q[1, 0] = Q[0, 1]
     # Q[1, 1] = dt**2 * (A[1, 0])**2 / 3
     # Q = Q * dt * sigma_w**2/missile['V']**2
-
+    
+    # #HDG noise 추가
+    # Q[0, 0] =  (np.deg2rad(sigma_w))**2
     return Q
+
 
 
 def zExpectation(H, xp, sat_upper, sat_lower, sigma_v):
@@ -109,17 +107,12 @@ def zExpectation(H, xp, sat_upper, sat_lower, sigma_v):
     # 편향 보정을 포함한 측정값의 예상 값 계산
     Ez_total = (H @ xp - sigma_v * bias_lambda) * pus + sat_lower * pl + sat_upper * ph
 
-    # 편향 보정 없이 측정값의 예상 값 계산
-    Ez_total_nobias = H @ xp * pus + pl * sat_lower + ph * sat_upper
-    
+
     # 측정 행렬과 잡음 공분산 행렬 업데이트
     HH = pus * H
     RR = sigma_v**2 * (1 - bias_lambda**2) + sigma_v * H @ xp * bias_lambda + sigma_v * (sat_lower * pdf_l - sat_upper * pdf_h) / pus
-    HH_nobias = pus * H
-    RR_nobias = sigma_v**2 + 0 + sigma_v * (sat_lower * pdf_l - sat_upper * pdf_h) / pus
     
     # 포화 상태가 아닌 측정값의 예상 값 계산
     Ez_us = H @ xp * pus - sigma_v * (pdf_h - pdf_l)
-    
     # 계산된 값들 반환
-    return Ez_total, HH, RR, pdf_l, pdf_h, pl, ph, pus, bias_lambda, Ez_us, HH_nobias, RR_nobias, Ez_total_nobias
+    return Ez_total, HH, RR, pdf_l, pdf_h, pl, ph, pus, bias_lambda, Ez_us

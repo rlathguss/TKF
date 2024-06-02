@@ -12,10 +12,11 @@ def measm_tkf(sigma_0, true_sigma, sat_upper, sat_lower, firstRun):
 
     # 측정값이 상한값을 초과하는 경우
     if abs(z_sigma) >= sat_upper and z_sigma > 0:
+
         z_sigma = sat_upper  # 측정값을 상한값으로 조정
-        
     # 측정값이 하한값 이하인 경우
     elif abs(z_sigma) >= sat_upper and z_sigma < 0:
+
         z_sigma = sat_lower  # 측정값을 하한값으로 조정
 
     return z_sigma, v

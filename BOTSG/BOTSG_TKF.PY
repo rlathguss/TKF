@@ -4,68 +4,65 @@ from matplotlib.animation import FuncAnimation
 from SysM import sysm_tkf
 from MeasM import measm_tkf
 
+
 message = None
-# Navigation Constant
-N = 3
-index = 0
+
+sat_upper = np.deg2rad(40)                  # lim
+sat_lower = -sat_upper
+
+am0 = np.deg2rad(+30)                       # Alpha_M_0: Initial M HDG: Fixed constant.
+sigma_0 = am0                               # rad, Seeker's Initial Look Angle 
+sigma_desired = np.deg2rad(+50)             # sat_upper + np.deg2rad(5)  # rad, Seeker's Look Angle Limit
+
+
+amf = np.deg2rad(-80)       # rad, Desired Impact Angle
+
+accel_m = 0                 # Initial Missile Acceleration, m/s^2
+accel_max = 1000            # m/s^2, acceleration limit
+
+
 
 # Missile init params
-missile = {'y': 7000*np.sin(np.deg2rad(27)),           # y pos, m
-           'x': -7000*np.cos(np.deg2rad(27)),          # x pos, m
-           'HDG': np.deg2rad(-22),
-           'HDG_prev' : 0,
-           'HDG_dot' : 0,
-           'V': 200}                                   # velocity magnitude, m/s
+missile = {'y': 0,
+           'x': 0,
+           'HDG': am0,
+           'V': 300}                                   # velocity magnitude, m/s
 missile['yV'] = missile['V'] * np.sin(missile['HDG'])  # y velocity, m/s
 missile['xV'] = missile['V'] * np.cos(missile['HDG'])  # x velocity, m/s
 
 
 # Target init params
-target = {'y': 0,                # y pos, m
-          'x': 0,                # x pos, m
-          'HDG': np.deg2rad(0),  # heading, rad
+target = {'y': 0,
+          'x': 5000,
+          'HDG': 0,              # heading, rad
           'yV': 0,               # y velocity, m/s
           'xV': 0}               # x velocity, m/s
-target['V'] = np.sqrt(target['yV']**2 + target['xV']**2)  # velocity magnitude, m/s
+target['V'] = np.sqrt(target['yV']**2 + target['xV']**2)
 
 
-# Initial Look Angle
-sigma_0 = np.deg2rad(5)     # rad
-sigma_max = np.deg2rad(60)  # rad, Seeker's Look Angle Limit
-accel_m = 0                 # Initial Missile Acceleration, m/s^2
-accel_max = 100             # m/s^2, acceleration limit
+sigma_v = 0.0052;   # rad, ~= 0.298deg, Measurement Noise Standard Deviation
+sigma_w = 0.1;  
 
-sat_upper = np.deg2rad(7.5)
-sat_lower = -sat_upper
-
-# Other Initial Conditions and Parameters
-eta = target['V'] / missile['V']
-
-# sigma_d Selection in order to bring out lambda_switch and also compare whether initial setup is good or not.
-sigma_d_lower = np.arcsin(eta)                      # rad, Lower bound for sigma_d
-sigma_d_upper = min(np.arccos(2*eta), sigma_max)    # rad, Upper bound for sigma_d
-sigma_d = np.deg2rad(20)                            # rad, Desired Look Angle / Commanded Look Angle
+# Verifying Guidance Gains N=(k1- k2*lambda): N is defined in the PPN loop
+beta = 4*(sigma_desired - am0)/amf;                                  # beta is less or equal than 0
+k1 = (beta - np.sqrt(beta**2 + 4 * beta * am0 / amf))/2 + 1;    # Guidance gain k1
+k2 = (amf*(beta-np.sqrt(beta**2+4*beta*am0/amf))+2*am0)/amf**2;  # Guidance gain k2
 
 
-if not ((abs(sigma_d) > sigma_d_lower) and (abs(sigma_d) <= sigma_d_upper)):
-    print('Check sigma_d initial condition. Must be within a range.')
-    exit()
+# ================ Desired Impact Angle Achievement Survey ================
+if sigma_desired < am0:
+    print('Check initial am0 & sig_max conditions: Initial M.HDG is above the FOV limit. k1 & k2 become complex.')
+    raise SystemExit
 
-if sigma_0 > abs(sigma_d):
-    print('sigma_0 must be equal or less than sigma_d')
-    exit()
-
-amf = np.deg2rad(-80)  # rad, Desired Impact Angle
-lambda_switch = ((np.arctan2(np.sin(amf) - eta * np.sin(target['HDG']), np.cos(amf) - eta * np.cos(target['HDG']))) - ((amf) - (sigma_d)) / N) * (N / (N - 1))
-
-
-K = 250                                                                                             # K Gain Selection
-R0 = np.linalg.norm([target['x'] - missile['x'], target['y'] - missile['y']])                       # R0 초기화를 위해 target과 missile의 위치 차이의 노름을 계산합니다.
-K_upper = (accel_max * R0 + missile['V']**2 * np.sin(sigma_0)) / (R0 * (abs(sigma_d) - sigma_0))
-
-if K > K_upper:
-    print('K must be less than K_upper')
-
+# if amf < -2 * am0:
+#     if sigma_desired < -amf ** 2 / (4 * (amf + am0)):
+#         print('Check initial conditions. Out of feasible solution area. k1 & k2 become complex.')
+#         raise SystemExit
+# # else:
+#     if sigma_desired < am0:
+#         print('Initial M.HDG > FOV limit. Out of feasible solution area. k1 & k2 become complex.')
+#         raise SystemExit
+# =========================================================================
 
 S = 100                 # 최대 시뮬레이션 지속 시간, 초
 dt = 0.01               # 시간 단계 크기, 초
@@ -78,7 +75,6 @@ logger = {
     'myV': [],
     'mxV': [],
     'm_HDG': [],
-    'm_HDG_dot': [],
     'z_sigma': [],  
 
     'ty': [],
@@ -102,6 +98,7 @@ logger = {
     'M_Accel': [],
     'M_Accel_x': [],
     'M_Accel_y': [],
+    
     'xpp': [],
 
     'bias': [],
@@ -129,12 +126,12 @@ RTP_last = np.array([target['x'] - missile['x'], target['y'] - missile['y']])
 true_sigma = sigma_0
 
 # Target pos update
-target['y'] += target['yV'] * dt
-target['x'] += target['xV'] * dt
+target['y'] = target['y'] + target['yV'] * dt
+target['x'] = target['x'] + target['xV'] * dt
 
 # Missile pos update
-missile['y'] += missile['yV'] * dt
-missile['x'] += missile['xV'] * dt
+missile['y'] = missile['y'] + missile['yV'] * dt
+missile['x'] = missile['x'] + missile['xV'] * dt
 
 #--------------------------------------------------------------------------
 # Run sim
@@ -142,21 +139,21 @@ missile['x'] += missile['xV'] * dt
 for k in range(Niter):
 
     # Update heading
-    missile['HDG_prev'] = missile['HDG']
-    missile['HDG'] = np.arctan2(missile['yV'], missile['xV']) #+ np.deg2rad(0.1 * np.random.randn())
-
+    missile['HDG'] = np.arctan2(missile['yV'], missile['xV']) # +  np.deg2rad(sigma_w * np.random.randn())
+        
     RTP_true = np.array([target['x'] - missile['x'], target['y'] - missile['y']])           # True RTP (Range = LOS distance)
-    true_range = np.linalg.norm(RTP_true)
+    true_range = np.linalg.norm(RTP_true) #+ 0.1 * np.random.randn()
     Vm = np.sqrt(missile['yV']**2 + missile['xV']**2)                                       # Missile velocity, m/s
     true_lambda = np.arctan2(RTP_true[1], RTP_true[0])                                      # Line-of-sight (LOS) angle, rad w.r.t Ref.
     true_lambda_dot = - missile['V'] * np.sin(missile['HDG'] - true_lambda) / true_range    # LOS angle time derivatives (d/dt lambda), rad/s
     true_sigma = missile['HDG'] - true_lambda                                               # True Look Angle, rad
 
+
     # ================================================== TOBIT KALMAN FILTER ====================================================
     z, v = measm_tkf(sigma_0, true_sigma, sat_upper, sat_lower,k)  # MEASUREMENT MODEL
-    
+
     # SYSTEM MODEL & GUIDANCE FILTER
-    E_range, E_sigma, Cov_P, Ez_total, pdf_l, pdf_h, pl, ph, pus, bias_lambda, RR, HH, Ez_us, KK, K_EKF, x_EKF, xpp, x_nobias, HH_nobias, RR_nobias, Ez_total_nobias, K_nobias = sysm_tkf(z, dt, missile, accel_m, sat_upper, sat_lower,k)
+    E_range, E_sigma, Cov_P, Ez_total, pdf_l, pdf_h, pl, ph, pus, bias_lambda, Ez_us, RR, HH, K, xpp = sysm_tkf(z, dt, missile, accel_m, sat_upper, sat_lower,k)
     bias = bias_lambda * 0.0052  # bias = bias_lambda * "Measurement Noise Deviation(sigma_v)" 0.0052
     logger['bias'].append(bias)
 
@@ -174,23 +171,15 @@ for k in range(Niter):
     logger['Cov_P1'].append(Cov_P[0, 0])
     logger['Cov_P2'].append(Cov_P[1, 1])
     
-    TKF_range_error = true_range - E_range                        # Error btw true_range & E_range
-    E_lambda = missile['HDG'] - E_sigma                      # Line-of-sight (LOS) angle, rad w.r.t Ref.
-    E_lambda_dot = - missile['V'] * np.sin(E_sigma) / E_range # LOS angle time derivatives (d/dt lambda), rad/s
 
-    # Missile Heading Angle time derivative (d/dt missile.HDG), rad/s
-    if k == 0:
-        missile_HDG_dot = 0
-    else:
-        missile_HDG_dot = (missile['HDG'] - missile['HDG_prev']) / dt
-        missile['HDG_dot'] = missile_HDG_dot
-    K = 300
+    TKF_range_error = true_range - E_range                      # Error btw true_range & E_range
+    E_lambda = missile['HDG'] - E_sigma                         # Line-of-sight (LOS) angle, rad w.r.t Ref.
+    E_lambda_dot = - missile['V'] * np.sin(E_sigma) / E_range   # LOS angle time derivatives (d/dt lambda), rad/s
 
-    # Missile Acceleration 계산
-    accel_m = Vm * E_lambda_dot + K * (sigma_d - E_sigma) 
-    if abs(E_lambda) >= abs(lambda_switch) or index:
-        accel_m = N * Vm * E_lambda_dot
-        index = 1
+
+    # ================================================== Missile Acceleration ====================================================   
+    N = k1 - k2 * E_lambda
+    accel_m = N * Vm * E_lambda_dot
 
     # Acceleration Saturation Condition
     if abs(accel_m) > accel_max: 
@@ -201,11 +190,10 @@ for k in range(Niter):
         else:
             pass
 
-
-    interception_range = 5
+    # ================================================== Terminate sim condition ====================================================   
+    interception_range = 2.5
     # Terminate sim at interception
     if RTP_true[1]> -2 and abs(RTP_true[0])<=interception_range:
-    #if (abs(true_range) <= interception_range):
         impact_angle_error = abs(np.rad2deg(amf - missile['HDG']))
         if impact_angle_error < 2.5:
             message = (f"Target intercepted successfully with desired impact angle.\n"
@@ -219,7 +207,7 @@ for k in range(Niter):
         break
 
     if len(logger['true_range'])>=2:
-        if logger['true_range'][-1] > logger['true_range'][-2] and (abs(true_range) <= 2*interception_range):
+        if logger['true_range'][-1] > logger['true_range'][-2] and (abs(true_range) <= 4 * interception_range):
             message = ("Missile missed the target. Range is increasing, indicating divergence.")
             print(message)
             break
@@ -235,14 +223,13 @@ for k in range(Niter):
     missile['xV'] += M_accel_x * dt
 
     # Update positions
-    if true_range<100:
+    if true_range < 100:
         noise = 0.1
     else:
         noise = 0.3
     
-    missile['y'] += missile['yV'] * dt  + noise * np.random.randn()
-    missile['x'] += missile['xV'] * dt  + noise * np.random.randn()
-
+    missile['y'] += missile['yV'] * dt + noise * np.random.randn()
+    missile['x'] += missile['xV'] * dt + noise * np.random.randn()
 
     # 로깅
     logger['t'].append(k*dt)
@@ -251,7 +238,6 @@ for k in range(Niter):
     logger['myV'].append(missile['yV'])
     logger['mxV'].append(missile['xV'])
     logger['m_HDG'].append(missile['HDG'])
-    logger['m_HDG_dot'].append(missile['HDG_dot'])
 
     logger['ty'].append(target['y'])
     logger['tx'].append(target['x'])
@@ -280,6 +266,8 @@ for k in range(Niter):
 
 
 
+
+
 #--------------------------------------------------------------------------
 # Sim result
 #--------------------------------------------------------------------------
@@ -298,7 +286,7 @@ axs[0, 0].set_title('Missile & Target trajectory')
 axs[0, 0].legend()
 axs[0, 0].set_xlabel('+x (m)')
 axs[0, 0].set_ylabel('+y (m)')
-axs[0, 0].grid(True)
+# axs[0, 0].grid(True)
 
 # mx_array = np.array(logger['mx'])
 # my_array = np.array(logger['my'])
@@ -344,10 +332,10 @@ axs[0, 0].grid(True)
 
 
 # Estimated, True and Measured Sigma(Look angle)
-axs[0, 1].plot(logger['t'][:-5], np.rad2deg(logger['E_sigma'][:-5]), linewidth=0.8, color='steelblue', label='Estimated Look Angle')
-axs[0, 1].plot(logger['t'][:-5], np.rad2deg(logger['true_sigma'][:-5]), linewidth=1, color='gold', label='True Look Angle')
-axs[0, 1].scatter(logger['t'][:-5], np.rad2deg(logger['z_sigma'][:-5]), s=0.8, c='orange', label='Measured Look Angle')
-axs[0, 1].plot(logger['t'][:-5], np.rad2deg(logger['xpp'][:-5]), label='Predicted Look Angle')
+axs[0, 1].plot(logger['t'], np.rad2deg(logger['E_sigma']), linewidth=0.8, color='steelblue', label='Estimated Look Angle')
+axs[0, 1].plot(logger['t'], np.rad2deg(logger['true_sigma']), linewidth=1, color='gold', label='True Look Angle')
+axs[0, 1].scatter(logger['t'], np.rad2deg(logger['z_sigma']), s=0.8, c='orange', label='Measured Look Angle')
+axs[0, 1].plot(logger['t'], np.rad2deg(logger['xpp']), label='Predicted Look Angle')
 axs[0, 1].set_title('Estimated and True Look Angle')
 axs[0, 1].legend()
 axs[0, 1].set_xlabel('Elapsed time (sec)')
@@ -355,10 +343,10 @@ axs[0, 1].set_ylabel('Look Angle (deg)')
 # axs[0, 1].grid(True)
 
 # Look Angle Estimation Error & 3-sigma(P Mtx) bound
-axs[0, 2].plot(logger['t'][:-5], np.rad2deg(logger['TKF_look_error'][:-5],), linewidth=1.5, label='TKF Estimation Error')
-axs[0, 2].plot(logger['t'][:-5], 3*np.rad2deg(np.sqrt(logger['Cov_P1'][1:-5])), linewidth=2, color='r', label='3-sigma bound')
-axs[0, 2].plot(logger['t'][:-5],-3*np.rad2deg(np.sqrt(logger['Cov_P1'][1:-5])), linewidth=2, color='r')
-axs[0, 2].set_title('Look Angle Error Trajectory')
+axs[0, 2].plot(logger['t'], np.rad2deg(logger['TKF_look_error']), linewidth=1.5, label='TKF Estimation Error')
+axs[0, 2].plot(logger['t'], 3*np.rad2deg(np.sqrt(logger['Cov_P1'][1:])), linewidth=2, color='r', label='3-sigma bound')
+axs[0, 2].plot(logger['t'], -3*np.rad2deg(np.sqrt(logger['Cov_P1'][1:])), linewidth=2, color='r')
+axs[0, 2].set_title('Look Angle Error')
 axs[0, 2].legend()
 axs[0, 2].set_xlabel('Time (s)')
 axs[0, 2].set_ylabel('deg')
@@ -372,13 +360,13 @@ ax1.plot(logger['t'], logger['true_range'], label='True Range')
 ax1.scatter(logger['t'][I], M, color='red', label=f'Intercept: r = {M:.2F} m, t = {t_index_value:.2F} s', s=20)
 ax1.set_ylabel('Range (m)')
 ax1.set_xlabel('Elapsed time (sec)')
-ax1.set_title(f'IACCG(DPP&PPN), N = {N}')
+ax1.set_title(f'Estimated and True Range Error')
 # 두 번째 y축 설정
 ax2 = ax1.twinx()  # 두 번째 y축을 위한 설정
 ax2.scatter(logger['t'], logger['TKF_range_error'], color='blue', label='Range Error', s=0.8)
 # ax2.plot(logger['t'], 3*np.sqrt(logger['Cov_P2'][1:]), linewidth=2, color='r', label='3-sigma bound')
 # ax2.plot(logger['t'], -3*np.sqrt(logger['Cov_P2'][1:]), linewidth=2, color='r')
-ax2.set_ylabel('Range Error btw Estimated and True Range [m])')
+ax2.set_ylabel('Range Error (m)')
 
 # 레전드 핸들과 레이블 수집
 handles, labels = [], []
@@ -395,7 +383,7 @@ axs[1, 1].plot(logger['t'],  np.rad2deg(logger['m_HDG']), label='Missile Heading
 axs[1, 1].plot(logger['t'],  np.rad2deg(logger['true_lambda']),  label='LOS Angle')
 axs[1, 1].plot(logger['t'],  np.rad2deg(logger['true_sigma']), label='Look Angle')
 axs[1, 1].legend()
-axs[1, 1].set_title('IACCG(DPP+PPN)')
+axs[1, 1].set_title('Missile HDG, LOS Angle, Look Angel')
 axs[1, 1].set_xlabel('Elapsed time(sec)')
 axs[1, 1].set_ylabel('Degree')
 axs[1, 1].grid(True)
@@ -409,40 +397,6 @@ axs[1, 2].set_ylabel('Missile Acceleration (m/s^2)')
 axs[1, 2].grid(True)
 plt.tight_layout()
 plt.show()
-
-
-
-
-
-
-
-
-
-plt.figure()
-fig, ax1 = plt.subplots()
-
-p1, = ax1.plot(logger['t'], logger['E_range'], label='Estimated Range')
-p2, = ax1.plot(logger['t'], logger['true_range'], linewidth=2, label='True Range')
-ax1.set_ylabel('Range (m)')
-ax1.set_xlabel('Elapsed time (sec)')
-
-# 두 번째 y축 (오른쪽)
-ax2 = ax1.twinx()
-p3, = ax2.plot(logger['t'], np.rad2deg(logger['E_sigma']), linewidth=0.8, color='steelblue', label='Estimated Look Angle')
-p4, = ax2.plot(logger['t'], np.rad2deg(logger['true_sigma']), linewidth=1, color='gold', label='True Look Angle')
-p5 = ax2.scatter(logger['t'], np.rad2deg(logger['z_sigma']), s=0.8, c='orange', label='Measured Look Angle')
-p6, = ax2.plot(logger['t'], np.rad2deg(logger['xpp']), label='Predicted Look Angle')
-ax2.set_ylabel('Look Angle (degrees)')
-
-# 모든 레전드를 하나로 합침
-lines = [p1, p2, p3, p4, p5, p6]
-labels = [l.get_label() for l in lines[:4]] + ['Measured Look Angle', 'Predicted Look Angle']
-ax1.legend(lines, labels, loc='lower left')
-
-plt.title('Estimated and True Look Angle // Range')
-plt.tight_layout()
-plt.show()
-
 
 
 
@@ -498,23 +452,51 @@ plt.show()
 # plt.tight_layout()
 # plt.show()
 
-# # Range
-# plt.figure()
-# t_index_value = logger['t'][I]
-# plt.plot(logger['t'], logger['E_range'], label='Estimated Range')
-# plt.plot(logger['t'], logger['true_range'], linewidth=2, label='True Range')
-# plt.scatter(logger['t'][I], M, color='red', label=f'Intercept: r = {M} m, t = {t_index_value} s')
-# plt.title(f'IACCG(DPP&PPN), N = {N}')
-# plt.legend(loc='upper left')
-# plt.ylabel('Range (m)')
-# plt.xlabel('Elapsed time (sec)')
-# plt.gca().invert_yaxis()
+
+
+plt.figure()
+fig, ax1 = plt.subplots()
+
+p1, = ax1.plot(logger['t'], logger['E_range'], label='Estimated Range')
+p2, = ax1.plot(logger['t'], logger['true_range'], linewidth=2, label='True Range')
+ax1.set_ylabel('Range (m)')
+ax1.set_xlabel('Elapsed time (sec)')
+
+# 두 번째 y축 (오른쪽)
+ax2 = ax1.twinx()
+p3, = ax2.plot(logger['t'], np.rad2deg(logger['E_sigma']), linewidth=0.8, color='steelblue', label='Estimated Look Angle')
+p4, = ax2.plot(logger['t'], np.rad2deg(logger['true_sigma']), linewidth=1, color='gold', label='True Look Angle')
+p5 = ax2.scatter(logger['t'], np.rad2deg(logger['z_sigma']), s=0.8, c='orange', label='Measured Look Angle')
+p6, = ax2.plot(logger['t'], np.rad2deg(logger['xpp']), label='Predicted Look Angle')
+ax2.set_ylabel('Look Angle (degrees)')
+
+# 모든 레전드를 하나로 합침
+lines = [p1, p2, p3, p4, p5, p6]
+labels = [l.get_label() for l in lines[:4]] + ['Measured Look Angle', 'Predicted Look Angle']
+ax1.legend(lines, labels)
+
+plt.title('Estimated and True Look Angle // Range')
+plt.tight_layout()
+plt.show()
+
+
+
+
+# axs[0, 1].plot(logger['t'], np.rad2deg(logger['E_sigma']), linewidth=0.8, color='steelblue', label='Estimated Look Angle')
+# axs[0, 1].plot(logger['t'], np.rad2deg(logger['true_sigma']), linewidth=1, color='gold', label='True Look Angle')
+# axs[0, 1].scatter(logger['t'], np.rad2deg(logger['z_sigma']), s=0.8, c='orange', label='Measured Look Angle')
+# axs[0, 1].plot(logger['t'], np.rad2deg(logger['xpp']), label='Predicted Look Angle')
+# axs[0, 1].set_title('Estimated and True Look Angle')
+# axs[0, 1].legend()
+# axs[0, 1].set_xlabel('Elapsed time (sec)')
+# axs[0, 1].set_ylabel('Look Angle (deg)')
+
 
 
 # # 거리 오차
 # # Error between Estimation and True Range
 # plt.figure()
-# plt.scatter(logger['t'], logger['est_error'], color='blue', label='Range Error')
+# plt.scatter(logger['t'], logger['TKF_range_error'], color='blue', label='Range Error')
 # plt.title(f'IACCG(DPP&PPN), N = {N}')
 # plt.legend()
 # plt.ylabel('Range Error btw Estimated and True Range [m])')
